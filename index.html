@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PRM</title>
+  <link rel="stylesheet" href="./app.css">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icons/icon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <meta name="theme-color" content="#a2502a">
+  <!-- iOS ignores the manifest's display mode and reads these instead. The
+       apple- prefix is deprecated in Chrome but still required by Safari. -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="PRM">
+</head>
+<body>
+  <header>
+    <nav>
+      <a class="brand" href="#/">PRM</a>
+      <a href="#/">Today</a>
+      <a href="#/contacts">Contacts</a>
+      <a href="#/settings">Data</a>
+    </nav>
+  </header>
+  <main id="app"><p class="muted empty">Starting&hellip;</p></main>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
