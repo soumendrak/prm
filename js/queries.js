@@ -39,6 +39,21 @@ export const MIGRATIONS = [
    );
    CREATE INDEX idx_interactions_contact ON interactions(contact_id, happened_at DESC);
    CREATE INDEX idx_contacts_active ON contacts(archived, name);`,
+
+  // How two people know each other. One row per pair, stored with the smaller
+  // id first so the primary key does the deduping.
+  //
+  // ponytail: one shared label, so it reads the same from either side ("met at
+  // Priya's wedding", "cousins"). Directional pairs ("manager"/"report") would
+  // need a second label column and a side to hang it on; add that when a label
+  // actually needs to differ per direction.
+  `CREATE TABLE relations (
+     a_id  INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+     b_id  INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+     label TEXT,
+     PRIMARY KEY (a_id, b_id)
+   );
+   CREATE INDEX idx_relations_b ON relations(b_id);`,
 ]
 
 export const KINDS = ['note', 'call', 'meet', 'email', 'message']
@@ -285,6 +300,97 @@ export function snooze(q, id, days) {
   q.run('UPDATE contacts SET snoozed_until = ? WHERE id = ?', [until, id])
 }
 
+// ---------------------------------------------------------------- birthdays
+
+/**
+ * Whose birthday falls within `within` days of `day`.
+ *
+ * Birthdays are stored as either `YYYY-MM-DD` or Google's year-less
+ * `--MM-DD`, so the last five characters are the only part that is always
+ * there and always comparable.
+ *
+ * 29 February in a non-leap year lands on 1 March, which is what SQLite's
+ * date() does with it and what most people do with it too.
+ */
+const BIRTHDAY_SQL = `
+WITH shape AS (
+    SELECT id, name, birthday, substr(birthday, -5) AS md
+      FROM contacts
+     WHERE archived = 0
+       AND substr(ifnull(birthday, ''), -5) GLOB '[0-9][0-9]-[0-9][0-9]'
+),
+next AS (
+    SELECT id, name, birthday,
+           CASE WHEN date(strftime('%Y', ?) || '-' || md) >= date(?)
+                THEN date(strftime('%Y', ?) || '-' || md)
+                ELSE date(strftime('%Y', ?, '+1 year') || '-' || md)
+           END AS on_day
+      FROM shape
+)
+SELECT id, name, on_day,
+       CAST(julianday(on_day) - julianday(?) AS INTEGER) AS days_away,
+       CASE WHEN substr(birthday, 1, 4) GLOB '[0-9][0-9][0-9][0-9]'
+            THEN CAST(strftime('%Y', on_day) AS INTEGER)
+                 - CAST(substr(birthday, 1, 4) AS INTEGER)
+       END AS turning
+  FROM next
+ WHERE julianday(on_day) - julianday(?) <= ?
+ ORDER BY on_day, name COLLATE NOCASE`
+
+/** Far enough ahead to buy a card, close enough to still be Today's problem. */
+export const BIRTHDAY_WINDOW = 30
+
+export const birthdays = (q, day, within = BIRTHDAY_WINDOW) =>
+  q.all(BIRTHDAY_SQL, [day, day, day, day, day, day, within])
+
+// ---------------------------------------------------------------- relations
+
+/** Smaller id first, so a pair has exactly one row however it was entered. */
+const pair = (a, b) => (a < b ? [a, b] : [b, a])
+
+/** Both directions of the edge, from `id`'s point of view. */
+export const relations = (q, id) =>
+  q.all(
+    `SELECT c.id, c.name, c.archived, r.label
+       FROM relations r
+       JOIN contacts c
+         ON c.id = CASE WHEN r.a_id = ? THEN r.b_id ELSE r.a_id END
+      WHERE r.a_id = ? OR r.b_id = ?
+      ORDER BY c.name COLLATE NOCASE`,
+    [id, id, id],
+  )
+
+export function saveRelation(q, aId, bId, label) {
+  const a = Number(aId)
+  const b = Number(bId)
+  if (!Number.isInteger(a) || !Number.isInteger(b) || !b) {
+    throw new Error('Pick who they are connected to.')
+  }
+  if (a === b) throw new Error('Someone cannot be connected to themselves.')
+  if (!q.value('SELECT count(*) FROM contacts WHERE id = ?', [b])) {
+    throw new Error('That contact no longer exists.')
+  }
+  // Re-adding an existing pair edits its label rather than failing.
+  q.run(
+    `INSERT INTO relations (a_id, b_id, label) VALUES (?, ?, ?)
+     ON CONFLICT (a_id, b_id) DO UPDATE SET label = excluded.label`,
+    [...pair(a, b), blank(label)],
+  )
+}
+
+export const deleteRelation = (q, aId, bId) =>
+  q.run('DELETE FROM relations WHERE a_id = ? AND b_id = ?', pair(Number(aId), Number(bId)))
+
+/** Candidates for the connection picker on a contact page.
+ *  ponytail: every active contact, in one list. Swap for a search box if you
+ *  ever have enough people for the dropdown to feel slow. */
+export const others = (q, id) =>
+  q.all(
+    `SELECT id, name FROM contacts
+      WHERE archived = 0 AND id <> ? ORDER BY name COLLATE NOCASE`,
+    [id],
+  )
+
 // ---------------------------------------------------------------- import
 
 /** Everything already stored, so dedupe is not a query per row. */
@@ -319,3 +425,14 @@ export const counts = (q) => ({
   archived: q.value('SELECT count(*) FROM contacts WHERE archived = 1'),
   interactions: q.value('SELECT count(*) FROM interactions'),
 })
+
+/** Active contacts, flattened for vCard export. Tags become CATEGORIES. */
+export const exportContacts = (q) =>
+  q.all(`
+    SELECT c.name, c.email, c.phone, c.company, c.title, c.birthday, c.notes,
+           (SELECT group_concat(t.name, ',')
+              FROM contact_tags ct JOIN tags t ON t.id = ct.tag_id
+             WHERE ct.contact_id = c.id) AS tags
+      FROM contacts c
+     WHERE c.archived = 0
+     ORDER BY c.name COLLATE NOCASE`)

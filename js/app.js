@@ -46,6 +46,8 @@ function dueLabel(r) {
   return `due in ${-d} days`
 }
 
+const awayLabel = (d) => (d === 0 ? 'today' : d === 1 ? 'tomorrow' : `in ${d} days`)
+
 function sinceLabel(r) {
   const what = r.has_history ? 'spoke' : 'added'
   if (r.days_since === 0) return `${what} today`
@@ -59,7 +61,7 @@ const subtitle = (c) =>
 // ---------------------------------------------------------------- views
 
 async function viewToday() {
-  const { due, upcoming } = await call('home')
+  const { due, upcoming, birthdays } = await call('home')
   const { contacts } = await call('counts')
   const tracked = due.length + upcoming.length
 
@@ -76,6 +78,15 @@ async function viewToday() {
           ${c.snoozed ? 'unsnooze' : 'snooze 7d'}
         </button>
       </div>
+    </li>`
+
+  const bday = (b) => html`
+    <li>
+      <div class="who">
+        <a class="name" href="#/contacts/${b.id}">${b.name}</a>
+        <span class="sub">${b.turning ? `turning ${b.turning}` : b.on_day}</span>
+      </div>
+      <span class="when ${b.days_away === 0 ? 'overdue' : 'later'}">${awayLabel(b.days_away)}</span>
     </li>`
 
   let empty = ''
@@ -95,6 +106,10 @@ async function viewToday() {
   app.innerHTML = html`
     <h1>Today</h1>
     ${due.length ? html`<ul class="due-list">${list(due, row)}</ul>` : raw(empty)}
+    ${birthdays.length
+      ? html`<h2>Birthdays</h2>
+          <ul class="due-list">${list(birthdays, bday)}</ul>`
+      : ''}
     ${upcoming.length
       ? html`<h2>Coming up</h2>
           <ul class="due-list">${list(upcoming, row)}</ul>`
@@ -133,7 +148,7 @@ async function viewContacts(params) {
         ? raw(html`<a href="#/contacts">Back to active contacts</a>`)
         : raw(
             html`<a href="#/contacts?archived=1">View archived</a> &middot;
-              <a href="#/import">Import from Google</a>`,
+              <a href="#/import">Import contacts</a>`,
           )}
     </p>`
 
@@ -180,7 +195,7 @@ const KINDS = ['note', 'call', 'meet', 'email', 'message']
 async function viewContact(id) {
   const data = await call('getContact', id)
   if (!data) return notFound()
-  const { contact: c, tags, timeline, today } = data
+  const { contact: c, tags, timeline, relations, others, today } = data
 
   const field = (label, value, href) =>
     value
@@ -219,6 +234,36 @@ async function viewContact(id) {
 
     ${c.notes ? html`<p class="notes">${c.notes}</p>` : ''}
 
+    <h2>Connections</h2>
+    ${relations.length
+      ? html`<ul class="contact-list rel-list">
+          ${list(
+            relations,
+            (r) => html`
+              <li>
+                <div class="row">
+                  <a class="name" href="#/contacts/${r.id}">${r.name}</a>
+                  <span class="sub">${[r.label, r.archived ? 'archived' : ''].filter(Boolean).join(' · ')}</span>
+                  <button class="quiet" data-del-relation="${r.id}" data-from="${c.id}"
+                          data-name="${r.name}">remove</button>
+                </div>
+              </li>`,
+          )}
+        </ul>`
+      : ''}
+    ${others.length
+      ? html`<form class="log" id="rel-form">
+          <div class="log-top">
+            <select name="other" required>
+              <option value="">Connect to&hellip;</option>
+              ${list(others, (o) => html`<option value="${o.id}">${o.name}</option>`)}
+            </select>
+            <input name="label" placeholder="how? sister, ex-colleague&hellip;">
+            <button type="submit">Link</button>
+          </div>
+        </form>`
+      : html`<p class="muted empty">Add another contact to start linking people.</p>`}
+
     <h2>History</h2>
     <form class="log" id="log-form">
       <div class="log-top">
@@ -255,6 +300,13 @@ async function viewContact(id) {
       <button data-archive="${c.id}">${c.archived ? 'Unarchive' : 'Archive'}</button>
       <button data-delete-contact="${c.id}" data-name="${c.name}">Delete</button>
     </div>`
+
+  document.getElementById('rel-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const f = e.target
+    await guard(() => call('saveRelation', id, Number(f.other.value), f.label.value))
+    render()
+  })
 
   document.getElementById('log-form').addEventListener('submit', async (e) => {
     e.preventDefault()
@@ -370,16 +422,18 @@ let importedRows = null
 async function viewImport() {
   app.innerHTML = html`
     <p class="crumb"><a href="#/contacts">&larr; Contacts</a></p>
-    <h1>Import from Google</h1>
+    <h1>Import contacts</h1>
     <p class="error" id="err" hidden></p>
     <ol class="steps muted">
       <li>Open <a href="https://contacts.google.com/" target="_blank" rel="noreferrer">Google
-        Contacts</a>.</li>
-      <li>Choose <strong>Export</strong>, then the <strong>Google CSV</strong> format.</li>
-      <li>Pick the downloaded file below.</li>
+        Contacts</a>, or the address book on your phone.</li>
+      <li>Choose <strong>Export</strong>, then the <strong>vCard</strong> format.</li>
+      <li>Pick the downloaded <code>.vcf</code> file below.</li>
     </ol>
     <form class="stack" id="import-form">
-      <label>CSV file<input type="file" name="file" accept=".csv,text/csv" required></label>
+      <label>vCard file
+        <input type="file" name="file" accept=".vcf,.vcard,text/vcard,text/x-vcard" required>
+      </label>
       <div class="actions"><button type="submit">Preview</button></div>
     </form>
     <p class="muted footnote">
@@ -472,7 +526,14 @@ async function viewSettings() {
       That also means clearing site data deletes it &mdash; export a backup
       somewhere safe now and then.
     </p>
-    <p class="actions"><button id="export">Export backup</button></p>
+    <p class="actions">
+      <button id="export">Export backup</button>
+      <button class="quiet" id="export-vcf">Export contacts (.vcf)</button>
+    </p>
+    <p class="muted footnote">
+      The backup is the whole database, and is what <strong>Restore</strong>
+      reads. The vCard file is just the contacts, for importing somewhere else.
+    </p>
 
     <h2>Restore</h2>
     <p class="muted">
@@ -485,11 +546,13 @@ async function viewSettings() {
 
   document.getElementById('export').addEventListener('click', async () => {
     const bytes = await call('exportDb')
-    const stamp = (await call('today')).replaceAll('-', '')
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/x-sqlite3' }))
-    const a = Object.assign(document.createElement('a'), { href: url, download: `prm-${stamp}.sqlite3` })
-    a.click()
-    URL.revokeObjectURL(url)
+    download(new Blob([bytes], { type: 'application/x-sqlite3' }), `prm-${await stamp()}.sqlite3`)
+  })
+
+  document.getElementById('export-vcf').addEventListener('click', async () => {
+    const vcf = await call('exportVcf')
+    if (!vcf) return alert('No contacts to export yet.')
+    download(new Blob([vcf], { type: 'text/vcard' }), `prm-${await stamp()}.vcf`)
   })
 
   document.getElementById('restore-form').addEventListener('submit', async (e) => {
@@ -503,6 +566,15 @@ async function viewSettings() {
       render()
     })
   })
+}
+
+const stamp = async () => (await call('today')).replaceAll('-', '')
+
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = Object.assign(document.createElement('a'), { href: url, download: filename })
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // ---------------------------------------------------------------- plumbing
@@ -550,6 +622,11 @@ app.addEventListener('click', async (e) => {
   }
   if (b.dataset.archive) {
     await call('toggleArchived', Number(b.dataset.archive))
+    return render()
+  }
+  if (b.dataset.delRelation) {
+    if (!confirm(`Remove the connection to ${b.dataset.name}?`)) return
+    await call('deleteRelation', Number(b.dataset.from), Number(b.dataset.delRelation))
     return render()
   }
   if (b.dataset.delInteraction) {

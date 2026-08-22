@@ -370,3 +370,12 @@ button[disabled] {
 }
 
 .danger button:hover { border-color: #c0392b; color: #c0392b; }
+
+.rel-list .row { align-items: center; }
+.rel-list .name { font-weight: 550; }
+.rel-list a.name:hover { color: var(--accent); }
+.rel-list .sub { flex: 1; }
+.rel-list button { margin-left: auto; font-size: 0.82rem; padding: 0.3rem 0.6rem; }
+
+#rel-form .log-top select { flex: 1 1 8rem; }
+#rel-form .log-top input { flex: 1 1 8rem; min-width: 0; }
