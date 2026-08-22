@@ -73,7 +73,7 @@ async function viewToday() {
       </div>
       <span class="when ${c.days_overdue >= 0 ? 'overdue' : 'later'}">${dueLabel(c)}</span>
       <div class="acts">
-        <button data-touch="${c.id}">Logged it</button>
+        <button data-touch="${c.id}" data-name="${c.name}">Logged it</button>
         <button class="quiet" data-snooze="${c.id}" data-days="${c.snoozed ? 0 : 7}">
           ${c.snoozed ? 'unsnooze' : 'snooze 7d'}
         </button>
@@ -426,19 +426,23 @@ async function viewImport() {
     <p class="error" id="err" hidden></p>
     <ol class="steps muted">
       <li>Open <a href="https://contacts.google.com/" target="_blank" rel="noreferrer">Google
-        Contacts</a>, or the address book on your phone.</li>
-      <li>Choose <strong>Export</strong>, then the <strong>vCard</strong> format.</li>
-      <li>Pick the downloaded <code>.vcf</code> file below.</li>
+        Contacts</a>, or the address book on your phone. Choose
+        <strong>Export</strong>, then the <strong>vCard</strong> format.</li>
+      <li>Or, on <a href="https://www.linkedin.com/mypreferences/d/download-my-data"
+        target="_blank" rel="noreferrer">LinkedIn</a>, choose <strong>Get a copy of your
+        data</strong> &rarr; <strong>Connections</strong>, and unzip the email they send.</li>
+      <li>Pick the downloaded <code>.vcf</code> or <code>Connections.csv</code> below.</li>
     </ol>
     <form class="stack" id="import-form">
-      <label>vCard file
-        <input type="file" name="file" accept=".vcf,.vcard,text/vcard,text/x-vcard" required>
+      <label>vCard or LinkedIn CSV
+        <input type="file" name="file"
+               accept=".vcf,.vcard,.csv,text/vcard,text/x-vcard,text/csv" required>
       </label>
       <div class="actions"><button type="submit">Preview</button></div>
     </form>
     <p class="muted footnote">
-      Nothing is saved until you confirm. Contacts you already have are skipped,
-      so re-importing the same file is harmless.
+      Nothing is saved until you confirm. People you already have are left alone,
+      apart from blanks the file can fill in, so re-importing is harmless.
     </p>`
 
   document.getElementById('import-form').addEventListener('submit', async (e) => {
@@ -455,20 +459,23 @@ async function viewImport() {
 async function viewImportPreview() {
   if (!importedRows) return go('#/import')
   const rows = importedRows
-  const ready = rows.filter((r) => !r.skip).length
+  const ready = rows.filter((r) => !r.skip)
+  const fresh = ready.filter((r) => !r.merge).length
+  const merging = ready.length - fresh
 
   app.innerHTML = html`
     <p class="crumb"><a href="#/import">&larr; Choose a different file</a></p>
     <h1>Ready to import</h1>
     <p class="tally">
-      <strong>${ready}</strong> to import
-      ${rows.length - ready
-        ? raw(html`<span class="muted">&middot; ${rows.length - ready} skipped</span>`)
+      <strong>${fresh}</strong> to add
+      ${merging ? raw(html`<span class="muted">&middot; ${merging} to fill in</span>`) : ''}
+      ${rows.length - ready.length
+        ? raw(html`<span class="muted">&middot; ${rows.length - ready.length} skipped</span>`)
         : ''}
     </p>
     ${!rows.length
       ? html`<p class="muted empty">This file has no contact rows in it.</p>`
-      : !ready
+      : !ready.length
         ? html`<p class="muted empty">
             Nothing new in this file &mdash; you already have everyone in it.
           </p>`
@@ -482,14 +489,18 @@ async function viewImportPreview() {
               <div class="row">
                 <span class="name">${r.name}</span>
                 <span class="sub">${[r.email, r.company].filter(Boolean).join(' · ')}</span>
-                <span class="tags">${r.skip ?? r.tags.join(', ')}</span>
+                <span class="tags">
+                  ${r.skip ?? (r.merge ? `fills in ${r.fills.join(', ')}` : r.tags.join(', '))}
+                </span>
               </div>
             </li>`,
         )}
       </ul>
     </div>
     <p class="actions">
-      <button id="confirm-import" ${raw(ready ? '' : 'disabled')}>Import ${ready} contacts</button>
+      <button id="confirm-import" ${raw(ready.length ? '' : 'disabled')}>
+        Import ${ready.length} contact${ready.length === 1 ? '' : 's'}
+      </button>
       <a href="#/contacts">Cancel</a>
     </p>`
 
@@ -499,7 +510,10 @@ async function viewImportPreview() {
     if (n !== undefined) {
       app.innerHTML = html`
         <h1>Imported</h1>
-        <p class="tally"><strong>${n}</strong> contact${n === 1 ? '' : 's'} added</p>
+        <p class="tally">
+          <strong>${n.added}</strong> contact${n.added === 1 ? '' : 's'} added
+          ${n.updated ? raw(html`<span class="muted">&middot; ${n.updated} filled in</span>`) : ''}
+        </p>
         <p class="muted">
           Imported contacts have no keep-in-touch cadence yet, so nothing will
           nag you until you set one.
@@ -607,6 +621,58 @@ const go = (hash) => {
   else location.hash = hash
 }
 
+// ---------------------------------------------------------------- feedback
+
+let toastTimer = null
+
+/** Brief confirmation that an action landed, since most of them re-render the
+ *  view and would otherwise give no sign anything happened. */
+function toast(message) {
+  const el = document.getElementById('toast')
+  el.textContent = message
+  el.classList.add('show')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200)
+}
+
+// ---------------------------------------------------------------- theme
+
+const THEMES = ['auto', 'light', 'dark']
+
+/** `auto` follows the OS; the other two override it. Stored so the choice
+ *  survives a reload, and re-applied in index.html before first paint. */
+function setTheme(mode) {
+  if (mode === 'auto') {
+    delete document.documentElement.dataset.theme
+    localStorage.removeItem('prm-theme')
+  } else {
+    document.documentElement.dataset.theme = mode
+    localStorage.setItem('prm-theme', mode)
+  }
+  const btn = document.getElementById('theme-toggle')
+  btn.title = `Theme: ${mode}`
+  btn.setAttribute('aria-label', `Theme: ${mode}. Activate to change.`)
+}
+
+document.getElementById('theme-toggle').addEventListener('click', () => {
+  const current = document.documentElement.dataset.theme ?? 'auto'
+  const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length]
+  setTheme(next)
+  toast(`${next[0].toUpperCase()}${next.slice(1)} theme`)
+})
+
+setTheme(document.documentElement.dataset.theme ?? 'auto')
+
+/** The sticky search bar has to sit exactly below the sticky header, and the
+ *  header's height depends on the font and viewport, so measure it. */
+function measureHeader() {
+  const h = document.querySelector('header').offsetHeight
+  document.documentElement.style.setProperty('--header-h', `${h}px`)
+}
+
+addEventListener('resize', measureHeader)
+measureHeader()
+
 // Row actions, delegated once rather than bound per row.
 app.addEventListener('click', async (e) => {
   const b = e.target.closest('button')
@@ -614,37 +680,63 @@ app.addEventListener('click', async (e) => {
 
   if (b.dataset.touch) {
     await call('touch', Number(b.dataset.touch))
+    toast(`Logged \u2014 ${b.dataset.name}`)
     return render()
   }
   if (b.dataset.snooze) {
-    await call('snooze', Number(b.dataset.snooze), Number(b.dataset.days))
+    const days = Number(b.dataset.days)
+    await call('snooze', Number(b.dataset.snooze), days)
+    toast(days ? `Snoozed for ${days} days` : 'Snooze cleared')
     return render()
   }
   if (b.dataset.archive) {
     await call('toggleArchived', Number(b.dataset.archive))
+    toast('Archive updated')
     return render()
   }
   if (b.dataset.delRelation) {
     if (!confirm(`Remove the connection to ${b.dataset.name}?`)) return
     await call('deleteRelation', Number(b.dataset.from), Number(b.dataset.delRelation))
+    toast('Connection removed')
     return render()
   }
   if (b.dataset.delInteraction) {
     if (!confirm(`Delete this ${b.dataset.kind}?`)) return
     await call('deleteInteraction', Number(b.dataset.delInteraction))
+    toast('Entry deleted')
     return render()
   }
   if (b.dataset.deleteContact) {
     if (!confirm(`Delete ${b.dataset.name} and their whole history? This cannot be undone.`)) return
     await call('deleteContact', Number(b.dataset.deleteContact))
+    toast(`${b.dataset.name} deleted`)
     return go('#/contacts')
   }
 })
+
+/** Light up the tab for the section being viewed. */
+function markTab(section) {
+  for (const a of document.querySelectorAll('.tabs a')) {
+    if (a.dataset.route === section) a.setAttribute('aria-current', 'page')
+    else a.removeAttribute('aria-current')
+  }
+}
+
+let lastPath = null
 
 async function render() {
   const [path, query] = (location.hash.slice(1) || '/').split('?')
   const params = new URLSearchParams(query)
   const parts = path.split('/').filter(Boolean)
+
+  // Importing lives under the Contacts tab.
+  markTab(parts[0] === 'import' ? 'contacts' : (parts[0] ?? ''))
+
+  // Landing mid-page after following a link is disorienting on a phone.
+  if (path !== lastPath) {
+    lastPath = path
+    scrollTo({ top: 0 })
+  }
 
   try {
     if (!parts.length) return await viewToday()

@@ -134,16 +134,19 @@ export function parseTags(raw) {
   return out
 }
 
+/** Adds one tag to a contact. A tag they already carry is left alone. */
+function addTag(q, contactId, name) {
+  q.run('INSERT OR IGNORE INTO tags (name) VALUES (?)', [name])
+  q.run(
+    `INSERT OR IGNORE INTO contact_tags (contact_id, tag_id)
+     VALUES (?, (SELECT id FROM tags WHERE name = ?))`,
+    [contactId, name],
+  )
+}
+
 function setTags(q, contactId, raw) {
   q.run('DELETE FROM contact_tags WHERE contact_id = ?', [contactId])
-  for (const name of parseTags(raw)) {
-    q.run('INSERT OR IGNORE INTO tags (name) VALUES (?)', [name])
-    q.run(
-      `INSERT INTO contact_tags (contact_id, tag_id)
-       VALUES (?, (SELECT id FROM tags WHERE name = ?))`,
-      [contactId, name],
-    )
-  }
+  for (const name of parseTags(raw)) addTag(q, contactId, name)
 }
 
 /** Blank means no reminder. Zero or negative would make someone permanently
@@ -393,21 +396,34 @@ export const others = (q, id) =>
 
 // ---------------------------------------------------------------- import
 
+/** The contact fields an import may fill in on someone already saved. */
+export const MERGE_FIELDS = ['email', 'phone', 'company', 'title', 'birthday', 'notes']
+
 /** Everything already stored, so dedupe is not a query per row. */
 export function existing(q) {
-  return {
-    emails: new Set(
-      q.all('SELECT lower(email) AS e FROM contacts WHERE email IS NOT NULL').map((r) => r.e),
-    ),
-    names: new Set(q.all('SELECT lower(name) AS n FROM contacts').map((r) => r.n)),
+  const rows = q.all(`SELECT id, name, ${MERGE_FIELDS.join(', ')} FROM contacts`)
+  const emails = new Map()
+  const names = new Map()
+  for (const r of rows) {
+    if (r.email) emails.set(r.email.trim().toLowerCase(), r)
+    const name = r.name.trim().toLowerCase()
+    // A name two contacts share cannot identify either: null means "ambiguous".
+    names.set(name, names.has(name) ? null : r)
   }
+  return { emails, names }
 }
 
-/** Insert the rows a plan marked importable. All or nothing. */
+/**
+ * Insert the rows a plan marked new and fill the gaps it marked mergeable.
+ * All or nothing. Merging only ever fills blanks — nothing stored is replaced.
+ */
 export function importRows(q, rows) {
   const wanted = rows.filter((r) => !r.skip)
+  const added = wanted.filter((r) => !r.merge)
+  const updated = wanted.filter((r) => r.merge)
+
   q.tx(() => {
-    for (const row of wanted) {
+    for (const row of added) {
       const id = q.insert(
         `INSERT INTO contacts (name, email, phone, company, title, birthday, notes,
                                created_at)
@@ -416,9 +432,24 @@ export function importRows(q, rows) {
       )
       setTags(q, id, row.tags.join(','))
     }
+    for (const row of updated) {
+      // Only known columns reach the statement — `fills` crossed a worker boundary.
+      const fields = (row.fills ?? []).filter((f) => MERGE_FIELDS.includes(f))
+      if (fields.length) {
+        q.run(
+          `UPDATE contacts SET ${fields.map(setter).join(', ')} WHERE id = ?`,
+          [...fields.map((f) => row[f]), row.merge],
+        )
+      }
+      for (const name of parseTags(row.tags.join(','))) addTag(q, row.merge, name)
+    }
   })
-  return wanted.length
+  return { added: added.length, updated: updated.length }
 }
+
+/** Notes are appended, so an imported profile link joins what you wrote. */
+const setter = (f) =>
+  f === 'notes' ? `notes = trim(coalesce(notes || char(10), '') || ?)` : `${f} = ?`
 
 export const counts = (q) => ({
   contacts: q.value('SELECT count(*) FROM contacts WHERE archived = 0'),
