@@ -3,6 +3,8 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+  # Run the tests on pull requests too, so nothing merges ungated.
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -27,6 +29,8 @@ jobs:
 
   deploy:
     needs: test
+    # Only main gets published; a pull request stops after the tests.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

@@ -1,12 +1,15 @@
 // Caches the app shell so PRM opens with no network at all. Your data is not
 // here — it lives in OPFS, managed by SQLite — so this only ever caches code.
 
-const VERSION = 'prm-v2'
+const VERSION = 'prm-v3'
 const SHELL = [
   './',
   './index.html',
   './app.css',
   './manifest.json',
+  // Self-hosted so the type still renders with no network.
+  './fonts/karla.woff2',
+  './fonts/newsreader.woff2',
   './js/app.js',
   './js/rpc.js',
   './js/worker.js',
