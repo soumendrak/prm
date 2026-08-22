@@ -6,7 +6,8 @@
 
 import sqlite3InitModule from '../vendor/sqlite3.mjs'
 import * as Q from './queries.js'
-import { plan } from './csv.js'
+import { plan } from './import.js'
+import { toVcard } from './vcard.js'
 
 const FILE = '/prm.sqlite3'
 
@@ -57,7 +58,7 @@ const API = {
 
   home: () => {
     const day = Q.today(q)
-    return { day, ...Q.splitDue(Q.cadenced(q, day)) }
+    return { day, ...Q.splitDue(Q.cadenced(q, day)), birthdays: Q.birthdays(q, day) }
   },
 
   listContacts: (filter) => ({
@@ -72,6 +73,8 @@ const API = {
       contact,
       tags: Q.contactTags(q, id),
       timeline: Q.timeline(q, id),
+      relations: Q.relations(q, id),
+      others: Q.others(q, id),
       today: Q.today(q),
     }
   },
@@ -84,6 +87,9 @@ const API = {
   deleteInteraction: (id) => Q.deleteInteraction(q, id),
   interactionOwner: (id) => Q.interactionOwner(q, id),
 
+  saveRelation: (aId, bId, label) => Q.saveRelation(q, aId, bId, label),
+  deleteRelation: (aId, bId) => Q.deleteRelation(q, aId, bId),
+
   touch: (id) => Q.touch(q, id),
   snooze: (id, days) => Q.snooze(q, id, days),
 
@@ -91,6 +97,7 @@ const API = {
   runImport: (rows) => Q.importRows(q, rows),
 
   exportDb: () => pool.exportFile(FILE),
+  exportVcf: () => toVcard(Q.exportContacts(q)),
   importDb: async (bytes) => {
     db.close()
     await pool.importDb(FILE, bytes)

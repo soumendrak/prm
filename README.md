@@ -33,8 +33,9 @@
 
 ---
 
-A single-user personal relationship manager. Log who you talk to, set a
-keep-in-touch cadence per person, and open **Today** to see who's due.
+A single-user personal relationship manager. Log who you talk to, note how
+people know each other, set a keep-in-touch cadence per person, and open
+**Today** to see who's due and whose birthday is coming up.
 
 It is a plain web page. There is no server and no account: SQLite runs inside
 your browser and stores its database in [OPFS][opfs] on your device. Load it
@@ -70,7 +71,7 @@ device and stays there.
 ## Working on it
 
 ```sh
-npm test        # 30 tests, no dependencies
+npm test        # 58 tests, no dependencies
 npm run serve   # http://localhost:8080
 ```
 
@@ -106,13 +107,18 @@ sqlite3 prm-20260822.sqlite3 'SELECT name, cadence_days FROM contacts'
 
 ## Importing your contacts
 
-Google Contacts → **Export** → **Google CSV**, then **Contacts → Import from
-Google**. You get a preview before anything is written, and re-importing the
-same file is a no-op — people are matched by email, then by exact name. Both
-the current and pre-2022 Google export formats are handled, and Google labels
-become tags.
+Export a **vCard** (`.vcf`) from Google Contacts, your phone's address book,
+iCloud or Nextcloud, then **Contacts → Import contacts**. You get a preview
+before anything is written, and re-importing the same file is a no-op — people
+are matched by email, then by exact name. `CATEGORIES` become tags.
+
+vCard 2.1, 3.0 and 4.0 are all read, including folded lines and
+quoted-printable text, so accented names survive.
 
 Imported contacts have no cadence, so nothing nags you until you set one.
+
+**Data → Export contacts** writes a vCard 3.0 file back out, which is what to
+hand to another address book. It is not a backup — see below for that.
 
 ## Layout
 
@@ -122,7 +128,8 @@ js/app.js           views and hash routing
 js/rpc.js           main-thread client for the worker
 js/worker.js        the worker that owns the database
 js/queries.js       every SQL statement, and the due-date logic
-js/csv.js           Google CSV parser
+js/import.js        reads a chosen file, and dedupes against what is stored
+js/vcard.js         vCard, both directions
 test/               node --test, run against node's built-in SQLite
 vendor/             official SQLite WASM build
 sw.js               offline app-shell cache
