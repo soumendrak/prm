@@ -137,3 +137,7 @@ sw.js               offline app-shell cache
 
 The tests run `js/queries.js` against node's built-in SQLite, so the exact SQL
 the browser executes is what gets verified — no browser or mocks required.
+
+## Sponsor
+
+If this project helps you, consider [sponsoring my work on GitHub](https://github.com/sponsors/soumendrak). Your support helps fund maintenance, documentation, and continued development.
